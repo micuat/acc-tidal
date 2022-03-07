@@ -22,7 +22,7 @@ udpPort.open();
 const { fft, util } = require("fft-js");
 
 const port = new SerialPort({
-  path: '/dev/ttyACM0',
+  path: '/dev/ttyUSB1',
   baudRate: 115200,
   autoOpen: false,
 })
@@ -41,59 +41,50 @@ port.on('open', function () {
   // open logic
 })
 
-// Read data that is available but keep the stream in "paused mode"
-//port.on('readable', function () {
-//  console.log('Data:', port.read().toString())
-//})
+let signals = [];
+let numDevices = 2;
 
-let signal = [];
+for (let i = 0; i < numDevices; i++) {
+  signals[i] = [];
+}
 
 const parser = port.pipe(new DelimiterParser({ delimiter: "\n" }))
 parser.on("data", (data) => {
-  let xyz = data.toString().replace(/\s/g, "").split(",");
-  if (isNaN(xyz[0]) === false && xyz[0] !== ""
-    && isNaN(xyz[1]) === false && xyz[1] !== ""
-    && isNaN(xyz[2]) === false && xyz[2] !== "") {
-    //    console.log(xyz)
-    let x = parseInt(xyz[0]);
-    let y = parseInt(xyz[0]);
-    let z = parseInt(xyz[0]);
-    signal.push(Math.sqrt(x * x + y * y + z * z));
+  let xyzs = data.toString().replace(/\s/g, "").split(",");
+  let results = [];
+  if (xyzs.length == 3 * numDevices) {
+    for (let i = 0; i < numDevices; i++) {
+      let signal = signals[i];
+      let x = parseFloat(xyzs[3 * i + 0]);
+      let y = parseFloat(xyzs[3 * i + 1]);
+      let z = parseFloat(xyzs[3 * i + 2]);
+      signal.push(Math.sqrt(x * x + y * y + z * z));
+
+      if (signal.length > 16) {
+        signal.shift();
+        let p = fft(signal);
+        let mag = util.fftMag(p);
+        let value = Math.min(1, mag[7] * 2);
+        results.push(value);
+    
+        udpPort.send({
+          address: "/ctrl",
+          args: [
+            {
+              type: "s",
+              value: "s" + i
+            },
+            {
+              type: "f",
+              value
+            },
+          ]
+        }, "127.0.0.1", 6010);
+      }
+    }
   }
-  else {
-    //    console.log("nan", xyz)
-  }
-  if (signal.length > 16) {
-    signal.shift();
-    let p = fft(signal);
-    let mag = util.fftMag(p);
-    //    console.log(mag.slice(2,3));
-    console.log(Math.min(1, mag[7] / 1000));
-
-    udpPort.send({
-      address: "/ctrl",
-      args: [
-        {
-          type: "s",
-          value: "hello"
-        },
-        {
-          type: "f",
-          value: Math.min(1, mag[7] / 1000)
-        },
-      ]
-    }, "127.0.0.1", 6010);
-
-    // udpPort.send({
-    //   address: "/processing",
-    //   args: mag.map(m => {
-    //     return {
-    //       type: "f",
-    //       value: m
-    //     }
-    //   })
-    // }, "127.0.0.1", 6060);
-
+  if (results.length > 0) {
+    console.log(results);
   }
 });
 
